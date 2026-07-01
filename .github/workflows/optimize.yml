@@ -1,0 +1,120 @@
+name: Auto Optimize Wallpaper, Video and Generate JSON
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'raw_images/**'
+      - 'raw_videos/**'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Install System Dependencies for Video
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Install Python Dependencies
+      run: pip install Pillow
+
+    - name: Run Script Optimization
+      run: |
+        python -c "
+        import os, json, shutil, subprocess
+        from PIL import Image
+        
+        repo_full = os.environ.get('GITHUB_REPOSITORY', 'ealimiteless/videobokehgraph')
+        
+        # === 1. PROSES WALLPAPER ===
+        os.makedirs('images', exist_ok=True)
+        wp_list = []
+        if os.path.exists('raw_images'):
+            wp_id = 1
+            for f in sorted(os.listdir('raw_images')):
+                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')) and f != '.gitkeep':
+                    try:
+                        img = Image.open(f'raw_images/{f}')
+                        if img.mode in ('RGBA', 'P'): img = img.convert('RGB')
+                        w_pref = (1080 / float(img.size[0]))
+                        h_size = int((float(img.size[1]) * float(w_pref)))
+                        img = img.resize((1080, h_size), Image.Resampling.LANCZOS)
+                        name_only = os.path.splitext(f)[0]
+                        clean_name = name_only.replace('-', '_').replace(' ', '_')
+                        img.save(f'images/{clean_name}.webp', 'WEBP', quality=80)
+                        
+                        wp_list.append({
+                            'id': wp_id,
+                            'title': name_only.replace('-', ' ').replace('_', ' ').title(),
+                            'category': 'General',
+                            'url': f'https://raw.githubusercontent.com/{repo_full}/main/images/{clean_name}.webp'
+                        })
+                        wp_id += 1
+                    except Exception as e: print(f'Error gambar {f}: {e}')
+            with open('wallpapers.json', 'w', encoding='utf-8') as jf:
+                json.dump(wp_list, jf, indent=2, ensure_ascii=False)
+
+        # === 2. PROSES VIDEO PENDEK (1 MENIT) ===
+        os.makedirs('videos', exist_ok=True)
+        video_list = []
+        if os.path.exists('raw_videos'):
+            v_id = 1
+            for f in sorted(os.listdir('raw_videos')):
+                if f.lower().endswith(('.mp4', '.mkv', '.mov', '.avi')) and f != '.gitkeep':
+                    try:
+                        name_only = os.path.splitext(f)[0]
+                        clean_name = name_only.replace('-', '_').replace(' ', '_')
+                        output_video_name = f'{clean_name}.mp4'
+                        
+                        input_path = f'raw_images/../raw_videos/{f}'
+                        output_path = f'videos/{output_video_name}'
+                        
+                        print(f'Mengompres video: {f} -> {output_video_name}')
+                        
+                        # Menggunakan FFMPEG untuk kompresi video ke codec H.264 (MP4 standar Android)
+                        # crf 28 membuat ukuran video sangat kecil tapi tetap tajam di HP
+                        cmd = [
+                            'ffmpeg', '-y', '-i', input_path,
+                            '-vcodec', 'libx264', '-crf', '28',
+                            '-acodec', 'aac', '-b:a', '128k',
+                            output_path
+                        ]
+                        subprocess.run(cmd, check=True)
+                        
+                        display_title = name_only.replace('-', ' ').replace('_', ' ').title()
+                        
+                        video_list.append({
+                            'id': v_id,
+                            'title': display_title,
+                            'category': 'Shorts',
+                            'video_url': f'https://raw.githubusercontent.com/{repo_full}/main/videos/{output_video_name}'
+                        })
+                        print(f'Sukses memproses video: {output_video_name}')
+                        v_id += 1
+                    except Exception as e: 
+                        print(f'Error video {f}: {e}')
+                        
+            with open('videos.json', 'w', encoding='utf-8') as jf:
+                json.dump(video_list, jf, indent=2, ensure_ascii=False)
+        "
+
+    - name: Commit and Push Changes Automatically
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action Bot"
+        git add images/ wallpapers.json videos/ videos.json
+        git commit -m "Otomatisasi update Wallpaper dan Video Pendek via FFMPEG" || exit 0
+        git push
